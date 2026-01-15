@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>CSV重複チェッカー</title>
+    <style>
+        body { font-family: 'Segoe UI', Meiryo, sans-serif; background: #f0f2f5; padding: 20px; color: #333; }
+        .container { max-width: 1200px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+        
+        h2 { margin-top: 0; color: #1a1a1a; border-left: 5px solid #007bff; padding-left: 15px; }
+        
+        textarea { width: 100%; height: 180px; padding: 12px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-family: monospace; font-size: 13px; margin-bottom: 20px; outline: none; transition: 0.3s; }
+        textarea:focus { border-color: #007bff; box-shadow: 0 0 0 3px rgba(0,123,255,0.1); }
+
+        .settings { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 20px; align-items: center; }
+        .mode-group { display: flex; gap: 10px; }
+        
+        .radio-label { display: flex; align-items: center; cursor: pointer; background: #fff; padding: 8px 15px; border-radius: 6px; border: 1px solid #ddd; font-weight: bold; transition: 0.2s; }
+        input[type="radio"] { margin-right: 8px; }
+        input[type="radio"]:checked + span { color: #007bff; }
+        .radio-label:has(input:checked) { border-color: #007bff; background: #eef6ff; }
+
+        .result-container { overflow: auto; max-height: 500px; background: #fff; border: 1px solid #eee; border-radius: 8px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: auto; }
+        th, td { border: 1px solid #eee; padding: 10px; text-align: left; white-space: nowrap; }
+        th { background: #f1f1f1; position: sticky; top: 0; z-index: 10; }
+
+        /* 重複強調スタイル */
+        .dup-row { background-color: #fff0f0 !important; } /* 行重複は薄い赤背景 */
+        .dup-cell { color: #d63031; font-weight: bold; position: relative; } /* 列重複は文字を赤く */
+        .dup-cell::after { content: ' [列重複]'; font-size: 9px; vertical-align: super; opacity: 0.7; }
+        .row-tag { background: #d63031; color: white; font-size: 10px; padding: 2px 5px; border-radius: 3px; margin-right: 8px; }
+
+        .summary { margin-top: 15px; font-size: 0.9rem; color: #666; display: flex; justify-content: space-between; }
+        .btn-clear { background: #6c757d; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>CSV重複チェッカー</h2>
+    <p style="font-size: 0.85rem; color: #777;">Excelやスプレッドシートからデータを貼り付けるだけで、重複を瞬時に可視化します。</p>
+
+    <textarea id="input" placeholder="ここにCSVまたはExcelからコピーしたデータを貼り付けてください..." oninput="process()"></textarea>
+
+    <div class="settings">
+        <strong>チェックモード:</strong>
+        <div class="mode-group">
+            <label class="radio-label"><input type="radio" name="mode" value="col" checked onchange="process()"><span>列の重複</span></label>
+            <label class="radio-label"><input type="radio" name="mode" value="row" onchange="process()"><span>行の重複</span></label>
+            <label class="radio-label"><input type="radio" name="mode" value="both" onchange="process()"><span>両方</span></label>
+        </div>
+        <button class="btn-clear" onclick="document.getElementById('input').value=''; process();">クリア</button>
+    </div>
+
+    <div class="result-container">
+        <table id="target-table">
+            <thead><tr id="table-head"></tr></thead>
+            <tbody id="table-body"></tbody>
+        </table>
+    </div>
+
+    <div class="summary">
+        <div id="stat-info">データを入力してください</div>
+        <div id="dup-count"></div>
+    </div>
+</div>
+
+<script>
+    function process() {
+        const input = document.getElementById('input').value.trim();
+        const mode = document.querySelector('input[name="mode"]:checked').value;
+        const tbody = document.getElementById('table-body');
+        const thead = document.getElementById('table-head');
+        const stat = document.getElementById('stat-info');
+        const dupStat = document.getElementById('dup-count');
+
+        if (!input) {
+            tbody.innerHTML = ""; thead.innerHTML = "";
+            stat.innerText = "データを入力してください";
+            dupStat.innerText = "";
+            return;
+        }
+
+        // 行と列の分解（カンマまたはタブ対応）
+        const rows = input.split('\n').map(r => r.split(/,|\t/));
+        const rowStrings = input.split('\n').map(r => r.trim()); // 行全体の比較用
+        const colCount = rows[0].length;
+
+        // --- 重複ロジック計算 ---
+        
+        // 1. 列ごとの重複カウント
+        let colDupMaps = [];
+        for (let c = 0; c < colCount; c++) {
+            const counts = {};
+            rows.forEach(r => { 
+                const val = r[c]?.trim();
+                if(val) counts[val] = (counts[val] || 0) + 1; 
+            });
+            colDupMaps[c] = counts;
+        }
+
+        // 2. 行全体の重複カウント
+        const rowCounts = {};
+        rowStrings.forEach(s => { if(s) rowCounts[s] = (rowCounts[s] || 0) + 1; });
+
+        // --- 描画処理 ---
+        
+        // ヘッダー生成
+        thead.innerHTML = rows[0].map((_, i) => `<th>列 ${i+1}</th>`).join('');
+
+        let html = "";
+        let dupRowsFound = 0;
+        let dupCellsFound = 0;
+
+        rows.forEach((row, rIdx) => {
+            const isRowDup = rowCounts[rowStrings[rIdx]] > 1;
+            const rowClass = (isRowDup && (mode === 'row' || mode === 'both')) ? 'dup-row' : '';
+            if (isRowDup) dupRowsFound++;
+
+            html += `<tr class="${rowClass}">`;
+            row.forEach((cell, cIdx) => {
+                const val = cell.trim();
+                const isColDup = colDupMaps[cIdx][val] > 1;
+                let cellClass = (isColDup && (mode === 'col' || mode === 'both')) ? 'dup-cell' : '';
+                
+                if (isColDup) dupCellsFound++;
+                
+                // 行重複タグ（最初のセルにのみ表示）
+                const rowTag = (cIdx === 0 && isRowDup && (mode === 'row' || mode === 'both')) ? '<span class="row-tag">行重複</span>' : '';
+                
+                html += `<td class="${cellClass}">${rowTag}${cell}</td>`;
+            });
+            html += "</tr>";
+        });
+
+        tbody.innerHTML = html;
+        stat.innerText = `総行数: ${rows.length} / 列数: ${colCount}`;
+        dupStat.innerHTML = `<span style="color:#d63031">検出: 重複行 ${dupRowsFound}件 / 重複箇所(セル) ${dupCellsFound}件</span>`;
+    }
+</script>
+
+</body>
+</html>
